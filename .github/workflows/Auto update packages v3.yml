@@ -450,67 +450,62 @@ jobs:
           done
           echo "Updated naiveproxy to version: $New_PKG_VERSION"
 
-      - name: Update SmartDNS
-        if: steps.check.outputs.status == 'success' && matrix.update_type == 'smartdns' && !cancelled()
+      - name: Update SmartDNS / SmartDNS WebUI
+        if: steps.check.outputs.status == 'success' && (matrix.update_type == 'smartdns' || matrix.update_type == 'smartdns_webui') && !cancelled()
         run: |
           cd && cd $GITHUB_WORKSPACE/${{ matrix.folder }}
           New_PKG_VERSION=${{ steps.check.outputs.New_PKG_VERSION }}
-          VER=${New_PKG_VERSION%-*}
-          REL=${New_PKG_VERSION##*-}
-          SMARTDNS_SHA=${{ steps.check.outputs.SMARTDNS_SHA }}
 
-          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$VER/" Makefile
-          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$REL/" Makefile
-          sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$SMARTDNS_SHA/" Makefile
-          # placeholder, the real value is computed by the next step
-          sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=0000000000000000000000000000000000000000000000000000000000000000/' Makefile
-          echo "Updated smartdns to $VER-$REL (commit $SMARTDNS_SHA)"
+          if [ "${{ matrix.update_type }}" == "smartdns" ]; then
+            VER=${New_PKG_VERSION%-*}
+            REL=${New_PKG_VERSION##*-}
+            SMARTDNS_SHA=${{ steps.check.outputs.SMARTDNS_SHA }}
+            sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$VER/" Makefile
+            sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$REL/" Makefile
+            sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$SMARTDNS_SHA/" Makefile
+            echo "Updated smartdns to $VER-$REL (commit $SMARTDNS_SHA)"
+          else
+            WEBUI_SHA=${{ steps.check.outputs.WEBUI_SHA }}
+            WEBUI_VERSION=${{ steps.check.outputs.WEBUI_VERSION }}
+            sed -i "s/^SMARTDNS_WEBUI_VERSION:=.*/SMARTDNS_WEBUI_VERSION:=$WEBUI_VERSION/" Makefile
+            sed -i "s/^SMARTDNS_WEBUI_SOURCE_VERSION:=.*/SMARTDNS_WEBUI_SOURCE_VERSION:=$WEBUI_SHA/" Makefile
+            echo "Updated smartdns-webui to $WEBUI_VERSION ($WEBUI_SHA)"
+          fi
 
-      - name: Update SmartDNS WebUI
-        if: steps.check.outputs.status == 'success' && matrix.update_type == 'smartdns_webui' && !cancelled()
-        run: |
-          cd && cd $GITHUB_WORKSPACE/${{ matrix.folder }}
-          WEBUI_SHA=${{ steps.check.outputs.WEBUI_SHA }}
-          WEBUI_VERSION=${{ steps.check.outputs.WEBUI_VERSION }}
+          # cleared so that the SDK recomputes both hashes in the next step
+          sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=/' Makefile
+          sed -i 's/^[[:space:]]*MIRROR_HASH:=.*/\tMIRROR_HASH:=/' Makefile
 
-          sed -i "s/^SMARTDNS_WEBUI_VERSION:=.*/SMARTDNS_WEBUI_VERSION:=$WEBUI_VERSION/" Makefile
-          sed -i "s/^SMARTDNS_WEBUI_SOURCE_VERSION:=.*/SMARTDNS_WEBUI_SOURCE_VERSION:=$WEBUI_SHA/" Makefile
-          # placeholder, the real value is computed by the next step
-          sed -i 's/^[[:space:]]*MIRROR_HASH:=.*/\tMIRROR_HASH:=0000000000000000000000000000000000000000000000000000000000000000/' Makefile
-          echo "Updated smartdns-webui to $WEBUI_VERSION ($WEBUI_SHA)"
-
-      - name: Compute SmartDNS MIRROR_HASH
+      - name: Fix SmartDNS MIRROR_HASH (make package/check FIXUP=1)
         if: steps.check.outputs.status == 'success' && (matrix.update_type == 'smartdns' || matrix.update_type == 'smartdns_webui') && !cancelled()
         run: |
-          # The git-source mirror hash depends on the OpenWrt SDK tar/zstd, so let the SDK itself report it via a deliberate mismatch.
-          cd $GITHUB_WORKSPACE/${{ matrix.folder }}
-          if [ "${{ matrix.update_type }}" == "smartdns" ]; then
-            FILE="smartdns-$(sed -n 's/^PKG_VERSION:=//p' Makefile).tar.zst"
-          else
-            FILE="smartdns-webui-$(sed -n 's/^SMARTDNS_WEBUI_VERSION:=//p' Makefile).tar.gz"
-          fi
-          cd $GITHUB_WORKSPACE
+          # openwrt/gh-action-sdk does not pass FIXUP to make, so run the SDK container directly
+          sudo chown -R 1000:1000 $GITHUB_WORKSPACE
+          docker run --rm --entrypoint bash -v $GITHUB_WORKSPACE:/feed ghcr.io/openwrt/sdk:x86-64-snapshot -c '
+            set -e
+            [ ! -f setup.sh ] || bash setup.sh
+            sed -e "s,https://git.openwrt.org/feed/,https://github.com/openwrt/," \
+                -e "s,https://git.openwrt.org/openwrt/,https://github.com/openwrt/," \
+                -e "s,https://git.openwrt.org/project/,https://github.com/openwrt/," \
+                feeds.conf.default > feeds.conf
+            echo "src-link passwall_packages /feed/" >> feeds.conf
+            ./scripts/feeds update -a
+            make defconfig
+            ./scripts/feeds install -p passwall_packages -f smartdns
+            make package/smartdns/download V=s
+            make package/smartdns/check FIXUP=1 V=s
+          '
 
-          git clone --depth 1 https://github.com/openwrt/gh-action-sdk /tmp/gh-action-sdk
-          docker build --build-arg ARCH=x86-64-snapshot -t smartdns-sdk /tmp/gh-action-sdk
-          mkdir -p /tmp/artifacts
-          docker run --rm -e FEEDNAME=passwall_packages -e PACKAGES=smartdns -e BUILD=0 -e NO_REFRESH_CHECK=1 -e NO_SHFMT_CHECK=1 \
-            -v $GITHUB_WORKSPACE:/feed -v /tmp/artifacts:/artifacts smartdns-sdk 2>&1 | tee /tmp/sdk.log || true
+      - name: Verify SmartDNS MIRROR_HASH
+        if: steps.check.outputs.status == 'success' && (matrix.update_type == 'smartdns' || matrix.update_type == 'smartdns_webui') && !cancelled()
+        run: |
           sudo chown -R $(id -u):$(id -g) $GITHUB_WORKSPACE
-
-          NEW_HASH=$(grep -oE "Hash mismatch for file ${FILE//./\\.}: expected [0-9a-f]+, got [0-9a-f]{64}" /tmp/sdk.log | tail -n1 | awk '{print $NF}')
-          if ! echo "$NEW_HASH" | grep -qE '^[0-9a-f]{64}$'; then
-            echo "❌ Unable to compute MIRROR_HASH for $FILE"
+          cd $GITHUB_WORKSPACE/${{ matrix.folder }}
+          grep -nE 'MIRROR_HASH' Makefile
+          if grep -qE 'MIRROR_HASH:=[[:space:]]*$' Makefile; then
+            echo "❌ MIRROR_HASH is still empty after FIXUP"
             exit 1
           fi
-
-          cd $GITHUB_WORKSPACE/${{ matrix.folder }}
-          if [ "${{ matrix.update_type }}" == "smartdns" ]; then
-            sed -i "s/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=$NEW_HASH/" Makefile
-          else
-            sed -i "s/^[[:space:]]*MIRROR_HASH:=.*/\tMIRROR_HASH:=$NEW_HASH/" Makefile
-          fi
-          echo "✅ $FILE MIRROR_HASH: $NEW_HASH"
 
       - name: Update Multi-Arch Package (TUIC)
         if: steps.check.outputs.status == 'success' && matrix.update_type == 'multi_arch_tuic' && !cancelled()
