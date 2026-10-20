@@ -67,6 +67,8 @@ jobs:
           - shadow-tls
           - shadowsocks-rust
           - sing-box
+          - smartdns
+          - smartdns-webui
           - v2ray-plugin
           - xray-core
           - xray-plugin
@@ -167,6 +169,22 @@ jobs:
             prerelease_api_command: >
               curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r 'first | .tag_name' | sed -e 's/.*v//'
             release_download_url: https://codeload.github.com/SagerNet/sing-box/tar.gz/v
+          
+          - pakcages: smartdns
+            update_type: smartdns
+            folder: smartdns
+            release_api_command: >
+              curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns/releases" | jq -r 'map(select((.prerelease|not) and (.tag_name|test("^Release[0-9]")))) | first | .tag_name'
+            prerelease_api_command: >
+              curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns/releases" | jq -r 'map(select(.tag_name|test("^Release[0-9]"))) | first | .tag_name'
+
+          - pakcages: smartdns-webui
+            update_type: smartdns_webui
+            folder: smartdns
+            release_api_command: >
+              curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns-webui/commits?per_page=1" | jq -r '.[0].sha'
+            prerelease_api_command: >
+              curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns-webui/commits?per_page=1" | jq -r '.[0].sha'
 
           - pakcages: v2ray-plugin
             update_type: single
@@ -248,10 +266,14 @@ jobs:
 
           if [ "$is_continue" = "true" ]; then
             cd && cd $GITHUB_WORKSPACE/${{ matrix.folder }}
-            if [ "${{ matrix.update_type }}" == "multi_arch_ifeq" ]; then
+            if [ "${{ matrix.update_type }}" == "multi_arch_ifeq" ] || [ "${{ matrix.update_type }}" == "smartdns" ]; then
               VER=$(sed -n '/^PKG_VERSION:=/p' Makefile | awk -F '=' '{print $2}')
               REL=$(sed -n '/^PKG_RELEASE:=/p' Makefile | awk -F '=' '{print $2}')
               Old_PKG_VERSION="${VER}-${REL}"
+            elif [ "${{ matrix.update_type }}" == "smartdns_webui" ]; then
+              OLD_WEBUI_VER=$(sed -n '/^SMARTDNS_WEBUI_VERSION:=/p' Makefile | awk -F '=' '{print $2}')
+              OLD_WEBUI_SHA=$(sed -n '/^SMARTDNS_WEBUI_SOURCE_VERSION:=/p' Makefile | awk -F '=' '{print $2}')
+              Old_PKG_VERSION="${OLD_WEBUI_VER}-${OLD_WEBUI_SHA}"
             else
               Old_PKG_VERSION=$(sed -n '/^${{ matrix.version_head }}/p' Makefile | awk -F '=' '{print $2}')
             fi
@@ -268,6 +290,44 @@ jobs:
               exit 0
             fi
 
+            if [ "${{ matrix.update_type }}" == "smartdns" ]; then
+              # tag like Release48.4 -> strip leading letters -> 48.4 -> PKG_VERSION 1.<release year>.48.4, PKG_RELEASE 1
+              SMARTDNS_TAG="$New_PKG_VERSION"
+              CLEAN=$(echo "$SMARTDNS_TAG" | sed -E 's/^[a-zA-Z_]*//')
+              YEAR=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns/releases/tags/$SMARTDNS_TAG" | jq -r '.published_at[0:4]')
+              if ! echo "$CLEAN" | grep -qE '^[0-9]+\.[0-9]+$' || ! echo "$YEAR" | grep -qE '^[0-9]{4}$'; then
+                echo "⚠️ Warning: Unable to parse smartdns tag '$SMARTDNS_TAG'. Skipping this update."
+                echo "status=failure" >> $GITHUB_OUTPUT
+                exit 0
+              fi
+              SMARTDNS_SHA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns/commits/$SMARTDNS_TAG" | jq -r .sha)
+              if [ -z "$SMARTDNS_SHA" ] || [ "$SMARTDNS_SHA" == "null" ]; then
+                echo "⚠️ Warning: Unable to get commit of $SMARTDNS_TAG. Skipping this update."
+                echo "status=failure" >> $GITHUB_OUTPUT
+                exit 0
+              fi
+              New_PKG_VERSION="1.${YEAR}.${CLEAN}-1"
+              echo "SMARTDNS_SHA=$SMARTDNS_SHA" >> $GITHUB_OUTPUT
+            fi
+
+            if [ "${{ matrix.update_type }}" == "smartdns_webui" ]; then
+              # SMARTDNS_WEBUI_VERSION follows the latest release, SMARTDNS_WEBUI_SOURCE_VERSION follows the latest commit
+              WEBUI_VERSION="$OLD_WEBUI_VER"
+              WEBUI_SHA="$New_PKG_VERSION"
+              if [ "${{ github.event.inputs.is_update_from_prerelease }}" = "true" ]; then
+                REL_TAG=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns-webui/releases" | jq -r 'first | .tag_name')
+              else
+                REL_TAG=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns-webui/releases" | jq -r 'map(select(.prerelease|not)) | first | .tag_name')
+              fi
+              REL_VER=${REL_TAG#v}
+              if [ -n "$REL_VER" ] && [ "$REL_VER" != "null" ]; then
+                WEBUI_VERSION="$REL_VER"
+              fi
+              echo "WEBUI_VERSION=$WEBUI_VERSION" >> $GITHUB_OUTPUT
+              echo "WEBUI_SHA=$WEBUI_SHA" >> $GITHUB_OUTPUT
+              New_PKG_VERSION="${WEBUI_VERSION}-${WEBUI_SHA}"
+            fi
+
             echo "Current version of ${{ matrix.pakcages }}: $Old_PKG_VERSION"
             echo "Latest release version of ${{ matrix.pakcages }}: $New_PKG_VERSION"
 
@@ -275,7 +335,11 @@ jobs:
             ver1="$Old_PKG_VERSION"
             ver2="$New_PKG_VERSION"
 
-            if [[ "$(printf "%s\n%s" "$ver1" "$ver2" | sort -V | head -n 1)" == "$ver1" && "$ver1" != "$ver2" ]]; then
+            if [ "${{ matrix.update_type }}" == "smartdns_webui" ]; then
+              # commit SHAs are not orderable, any difference means update
+              New_PKG_VERSION="${WEBUI_VERSION}-${WEBUI_SHA:0:7}"
+              if [ "$ver1" != "$ver2" ]; then result=1; else result=0; fi
+            elif [[ "$(printf "%s\n%s" "$ver1" "$ver2" | sort -V | head -n 1)" == "$ver1" && "$ver1" != "$ver2" ]]; then
               result=1
             elif [[ "$ver1" == "$ver2" ]]; then
               result=0
@@ -385,6 +449,34 @@ jobs:
             rm -f "/tmp/$arch.tar.xz"
           done
           echo "Updated naiveproxy to version: $New_PKG_VERSION"
+
+      - name: Update SmartDNS
+        if: steps.check.outputs.status == 'success' && matrix.update_type == 'smartdns' && !cancelled()
+        run: |
+          cd && cd $GITHUB_WORKSPACE/${{ matrix.folder }}
+          New_PKG_VERSION=${{ steps.check.outputs.New_PKG_VERSION }}
+          VER=${New_PKG_VERSION%-*}
+          REL=${New_PKG_VERSION##*-}
+          SMARTDNS_SHA=${{ steps.check.outputs.SMARTDNS_SHA }}
+
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$VER/" Makefile
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$REL/" Makefile
+          sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$SMARTDNS_SHA/" Makefile
+          # git source: the mirror hash is cleared and filled in by the first build
+          sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=/' Makefile
+          echo "Updated smartdns to $VER-$REL (commit $SMARTDNS_SHA)"
+
+      - name: Update SmartDNS WebUI
+        if: steps.check.outputs.status == 'success' && matrix.update_type == 'smartdns_webui' && !cancelled()
+        run: |
+          cd && cd $GITHUB_WORKSPACE/${{ matrix.folder }}
+          WEBUI_SHA=${{ steps.check.outputs.WEBUI_SHA }}
+          WEBUI_VERSION=${{ steps.check.outputs.WEBUI_VERSION }}
+
+          sed -i "s/^SMARTDNS_WEBUI_VERSION:=.*/SMARTDNS_WEBUI_VERSION:=$WEBUI_VERSION/" Makefile
+          sed -i "s/^SMARTDNS_WEBUI_SOURCE_VERSION:=.*/SMARTDNS_WEBUI_SOURCE_VERSION:=$WEBUI_SHA/" Makefile
+          sed -i 's/^[[:space:]]*MIRROR_HASH:=.*/\tMIRROR_HASH:=/' Makefile
+          echo "Updated smartdns-webui to $WEBUI_VERSION ($WEBUI_SHA)"
 
       - name: Update Multi-Arch Package (TUIC)
         if: steps.check.outputs.status == 'success' && matrix.update_type == 'multi_arch_tuic' && !cancelled()
