@@ -1,24 +1,24 @@
 #
-# Copyright (c) 2018-2025 Nick Peng (pymumu@gmail.com)
+# Copyright (c) 2018-2026 Nick Peng (pymumu@gmail.com)
 # This is free software, licensed under the GNU General Public License v3.
 #
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=smartdns
-PKG_VERSION:=1.2026.48.4
-PKG_RELEASE:=3
-PKG_TAGS=1.2026.v48.4.3-canary_with_ui-canary-canary
+PKG_VERSION:=1.2026.48.2
+PKG_RELEASE:=1
 
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_TAGS).tar.gz
-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_TAGS)
-PKG_SOURCE_URL:=https://codeload.github.com/PikuZheng/smartdns/tar.gz/$(PKG_TAGS)?
-PKG_HASH:=bc22f219007298fefa68b9c1dae583e71dca2a670fc0f4e96f8c00cc93effedc
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://www.github.com/pymumu/smartdns.git
+PKG_MIRROR_HASH:=d8ca4173e7268fc83bd15a05ee4c152bc55a3dfdbe23f9070c97a89a70e3aea4
+PKG_SOURCE_VERSION:=2b2b31f1e5acf6cbb975f17c600ccc6bffd03cdf
 
-SMARTDNS_WEBUI_SOURCE_URL:=https://codeload.github.com/PikuZheng/smartdns-webui/tar.gz
-SMARTDNS_WEBUI_SOURCE_VERSION:=4667a7dae18b9776576cda6c98be649703fe671a
-SMARTDNS_WEBUI_FILE:=smartdns-webui-$(SMARTDNS_WEBUI_SOURCE_VERSION).tar.gz
-SMARTDNS_WEBUI_HASH:=422c920f825b1570f76f1c7d9c2a74bf1c422fddb4f304a0fcb9a1229bc50580
+SMARTDNS_WEBUI_VERSION:=1.0.0
+SMARTDNS_WEBUI_SOURCE_PROTO:=git
+SMARTDNS_WEBUI_SOURCE_URL:=https://github.com/pymumu/smartdns-webui.git
+SMARTDNS_WEBUI_SOURCE_VERSION:=c0d2411d20bf8b172a045adbe07166df6691e58b
+SMARTDNS_WEBUI_FILE:=smartdns-webui-$(SMARTDNS_WEBUI_VERSION).tar.gz
 
 PKG_MAINTAINER:=Nick Peng <pymumu@gmail.com>
 PKG_LICENSE:=GPL-3.0-or-later
@@ -114,18 +114,19 @@ endef
 
 define Download/smartdns-webui
 	FILE:=$(SMARTDNS_WEBUI_FILE)
+	PROTO:=$(SMARTDNS_WEBUI_SOURCE_PROTO)
 	URL:=$(SMARTDNS_WEBUI_SOURCE_URL)
-	URL_FILE:=$(SMARTDNS_WEBUI_SOURCE_VERSION)
+	MIRROR_HASH:=42e280cbfc168f88690652b85ce919c2aeedc9ef7c4b55122742e484b23492cd
+	VERSION:=$(SMARTDNS_WEBUI_SOURCE_VERSION)
 	HASH:=$(SMARTDNS_WEBUI_HASH)
+	SUBDIR:=smartdns-webui
 endef
 $(eval $(call Download,smartdns-webui))
 
 ifdef CONFIG_PACKAGE_smartdns-ui
 define Build/Prepare
 	$(call Build/Prepare/Default)
-	$(INSTALL_DIR) $(PKG_BUILD_DIR)/smartdns-webui
-	$(TAR) -xzf $(DL_DIR)/$(SMARTDNS_WEBUI_FILE) \
-		-C $(PKG_BUILD_DIR)/smartdns-webui --strip-components=1
+	$(TAR) -C $(PKG_BUILD_DIR)/ -xf $(DL_DIR)/$(SMARTDNS_WEBUI_FILE)
 endef
 endif
 
