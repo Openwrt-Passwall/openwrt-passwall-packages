@@ -472,9 +472,14 @@ jobs:
             echo "Updated smartdns-webui to $WEBUI_VERSION ($WEBUI_SHA)"
           fi
 
-          # cleared so that the SDK recomputes both hashes in the next step
-          sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=/' Makefile
-          sed -i 's/^[[:space:]]*MIRROR_HASH:=.*/\tMIRROR_HASH:=/' Makefile
+          # only clear the hash owned by this update, the SDK recomputes it in the next step
+          echo "ORIG_PKG_MIRROR_HASH=$(sed -n 's/^PKG_MIRROR_HASH:=//p' Makefile)" >> $GITHUB_ENV
+          echo "ORIG_WEBUI_MIRROR_HASH=$(sed -n 's/^[[:space:]]*MIRROR_HASH:=//p' Makefile)" >> $GITHUB_ENV
+          if [ "${{ matrix.update_type }}" == "smartdns" ]; then
+            sed -i 's/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=/' Makefile
+          else
+            sed -i 's/^[[:space:]]*MIRROR_HASH:=.*/\tMIRROR_HASH:=/' Makefile
+          fi
 
       - name: Fix SmartDNS MIRROR_HASH (make package/check FIXUP=1)
         if: steps.check.outputs.status == 'success' && (matrix.update_type == 'smartdns' || matrix.update_type == 'smartdns_webui') && !cancelled()
@@ -492,7 +497,7 @@ jobs:
             ./scripts/feeds update -a
             make defconfig
             ./scripts/feeds install -p passwall_packages -f smartdns
-            make package/smartdns/download V=s
+            make package/smartdns/download V=s || true
             make package/smartdns/check FIXUP=1 V=s
           '
 
@@ -501,6 +506,12 @@ jobs:
         run: |
           sudo chown -R $(id -u):$(id -g) $GITHUB_WORKSPACE
           cd $GITHUB_WORKSPACE/${{ matrix.folder }}
+          # keep the hash that belongs to the other update untouched, even if FIXUP rewrote it
+          if [ "${{ matrix.update_type }}" == "smartdns" ]; then
+            sed -i "s/^[[:space:]]*MIRROR_HASH:=.*/\tMIRROR_HASH:=$ORIG_WEBUI_MIRROR_HASH/" Makefile
+          else
+            sed -i "s/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=$ORIG_PKG_MIRROR_HASH/" Makefile
+          fi
           grep -nE 'MIRROR_HASH' Makefile
           if grep -qE 'MIRROR_HASH:=[[:space:]]*$' Makefile; then
             echo "❌ MIRROR_HASH is still empty after FIXUP"
