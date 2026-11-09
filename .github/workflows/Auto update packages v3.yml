@@ -178,10 +178,10 @@ jobs:
             source_version_head: PKG_SOURCE_VERSION:=
             hash_head: PKG_HASH:=
             release_api_command: >
-              curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns/releases?per_page=100" | jq -r 'map(select((.prerelease|not) and (.tag_name|startswith("Release")))) | first | .tag_name' | sed -e 's/^Release//'
+              curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns/releases?per_page=100" | jq -r 'map(select((.prerelease|not) and (.tag_name|startswith("Release")))) | first | .tag_name'
             prerelease_api_command: >
-              curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns/releases?per_page=100" | jq -r 'map(select(.tag_name|startswith("Release"))) | first | .tag_name' | sed -e 's/^Release//'
-            tag_commit_api_url: https://api.github.com/repos/pymumu/smartdns/commits/Release
+              curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/pymumu/smartdns/releases?per_page=100" | jq -r 'map(select(.tag_name|startswith("Release"))) | first | .tag_name'
+            tag_commit_api_url: https://api.github.com/repos/pymumu/smartdns/commits/
             release_download_url: https://codeload.github.com/pymumu/smartdns/tar.gz/
 
           # smartdns-webui has no regular releases, so it tracks the latest commit of the default branch
@@ -296,12 +296,24 @@ jobs:
               exit 0
             fi
 
+            if [ "${{ matrix.update_type }}" == "smartdns_release" ]; then
+              # Keep the raw tag (e.g. Release48.5-RC1) for the commit lookup; the version becomes 48.5_rc1
+              New_PKG_TAG="$New_PKG_VERSION"
+              New_PKG_VERSION=$(echo "$New_PKG_TAG" | sed -e 's/^Release//' | tr 'A-Z-' 'a-z_')
+            fi
+
             echo "Current version of ${{ matrix.pakcages }}: $Old_PKG_VERSION"
             echo "Latest release version of ${{ matrix.pakcages }}: $New_PKG_VERSION"
 
             result=0
             ver1="$Old_PKG_VERSION"
             ver2="$New_PKG_VERSION"
+
+            if [ "${{ matrix.update_type }}" == "smartdns_release" ]; then
+              # "~" makes sort -V rank pre-releases below the final release (48.5_rc1 < 48.5)
+              ver1=$(echo "$ver1" | tr '_' '~')
+              ver2=$(echo "$ver2" | tr '_' '~')
+            fi
 
             if [ "${{ matrix.update_type }}" == "commit" ]; then
               # commit SHAs are not orderable, any difference means an update
@@ -321,6 +333,7 @@ jobs:
               echo "${{ matrix.pakcages }} is already the latest version ($New_PKG_VERSION), no update required"
             elif [[ $result -eq 1 ]]; then
               echo "New_PKG_VERSION=$New_PKG_VERSION" >> $GITHUB_OUTPUT
+              echo "New_PKG_TAG=$New_PKG_TAG" >> $GITHUB_OUTPUT
               echo "status=success" >> $GITHUB_OUTPUT
             else
               echo "status=failure" >> $GITHUB_OUTPUT
@@ -372,9 +385,11 @@ jobs:
           cd && cd $GITHUB_WORKSPACE/${{ matrix.folder }}
           New_PKG_VERSION=${{ steps.check.outputs.New_PKG_VERSION }}
 
-          SHA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "${{ matrix.tag_commit_api_url }}$New_PKG_VERSION" | jq -r '.sha')
+          New_PKG_TAG=${{ steps.check.outputs.New_PKG_TAG }}
+
+          SHA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "${{ matrix.tag_commit_api_url }}$New_PKG_TAG" | jq -r '.sha')
           if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "❌ Unable to resolve the commit of tag Release$New_PKG_VERSION: $SHA"
+            echo "❌ Unable to resolve the commit of tag $New_PKG_TAG: $SHA"
             exit 1
           fi
 
