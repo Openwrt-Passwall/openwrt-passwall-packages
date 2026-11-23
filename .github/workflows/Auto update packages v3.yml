@@ -561,3 +561,28 @@ jobs:
             --head "$branch" \
             --label "automated-pr"
           fi
+
+      - name: Trigger upstream openwrt-smartdns sync
+        if: steps.check.outputs.status == 'success' && steps.check.outputs.New_PKG_VERSION != '' && (matrix.pakcages == 'smartdns' || matrix.pakcages == 'smartdns-webui') && !cancelled()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ matrix.pakcages }}" == "smartdns" ]; then
+            keys="PKG_VERSION PKG_RELEASE PKG_SOURCE_VERSION PKG_HASH"
+          else
+            keys="SMARTDNS_WEBUI_SOURCE_VERSION SMARTDNS_WEBUI_HASH"
+          fi
+
+          values=""
+          for key in $keys; do
+            value=$(sed -n "s/^$key:=//p" "$GITHUB_WORKSPACE/${{ matrix.folder }}/Makefile" | head -n 1)
+            values="$values $key=$value"
+          done
+
+          gh workflow run "Sync smartdns to upstream" \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.ref_name }}" \
+            -f package="${{ matrix.pakcages }}" \
+            -f version="${{ steps.update.outputs.version }}" \
+            -f values="${values# }"

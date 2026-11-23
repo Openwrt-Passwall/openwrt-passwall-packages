@@ -1,0 +1,95 @@
+#
+# Description: Open a PR against pymumu/openwrt-smartdns when smartdns / smartdns-webui is updated.
+# Triggered by "Auto update packages v3" (workflow_dispatch), or manually.
+#
+name: "Sync smartdns to upstream"
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'smartdns or smartdns-webui'
+        required: true
+        type: choice
+        options:
+          - smartdns
+          - smartdns-webui
+      version:
+        description: 'New version, used in the branch and PR title'
+        required: true
+      values:
+        description: 'Makefile values to apply, e.g. "PKG_VERSION=48.6 PKG_RELEASE=1 PKG_SOURCE_VERSION=<sha> PKG_HASH=<hash>"'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Pull Request to upstream openwrt-smartdns
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
+          PACKAGE: ${{ github.event.inputs.package }}
+          VERSION: ${{ github.event.inputs.version }}
+          VALUES: ${{ github.event.inputs.values }}
+        run: |
+          UPSTREAM="pymumu/openwrt-smartdns"
+          title="$PACKAGE: update to $VERSION"
+          branch="patches-$PACKAGE-$VERSION"
+
+          if [ "$PACKAGE" == "smartdns" ]; then
+            allowed="PKG_VERSION PKG_RELEASE PKG_SOURCE_VERSION PKG_HASH"
+          else
+            allowed="SMARTDNS_WEBUI_SOURCE_VERSION SMARTDNS_WEBUI_HASH"
+          fi
+
+          OWNER=$(gh api user --jq .login)
+
+          # Skip if a PR from this branch was already opened (open, merged or closed by the maintainer)
+          # gh's --head does not support "owner:branch", so filter the fork owner with jq
+          EXISTING=$(gh pr list --repo "$UPSTREAM" --state all --head "$branch" --json number,headRepositoryOwner \
+            --jq "map(select(.headRepositoryOwner.login == \"$OWNER\")) | .[0].number // empty")
+          if [ -n "$EXISTING" ]; then
+            echo "PR for $branch already exists in $UPSTREAM: #$EXISTING"
+            exit 0
+          fi
+
+          gh repo fork "$UPSTREAM" --clone=false || true
+
+          git clone "https://github.com/$UPSTREAM.git" /tmp/openwrt-smartdns
+          cd /tmp/openwrt-smartdns
+
+          for pair in $VALUES; do
+            key="${pair%%=*}"
+            value="${pair#*=}"
+            if ! [[ " $allowed " == *" $key "* ]] || ! [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "❌ Invalid key/value: $pair"
+              exit 1
+            fi
+            sed -i "s|^$key:=.*|$key:=$value|" Makefile
+          done
+
+          if git diff --quiet; then
+            echo "$UPSTREAM is already up to date, no PR needed"
+            exit 0
+          fi
+
+          git config user.email "smallprogramzhusir@gmail.com"
+          git config user.name "David Mandy"
+          git checkout -b "$branch"
+          git commit -am "$title"
+
+          git remote add fork "https://x-access-token:${GH_TOKEN}@github.com/$OWNER/openwrt-smartdns.git"
+          # the fork may take a few seconds to become available right after creation
+          for i in 1 2 3 4 5 6; do
+            git push fork "$branch" && break
+            if [ "$i" == "6" ]; then echo "❌ Unable to push to the fork"; exit 1; fi
+            sleep 10
+          done
+
+          gh pr create \
+            --repo "$UPSTREAM" \
+            --head "$OWNER:$branch" \
+            --title "$title" \
+            --body "Automated update from [openwrt-passwall-packages](https://github.com/${{ github.repository }})."
