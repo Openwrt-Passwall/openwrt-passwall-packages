@@ -18,6 +18,7 @@ on:
     paths-ignore:
       - '**.md'
       - '.github/**'
+      - 'smartdns/**'
 env:
   TZ: Asia/Shanghai
 
@@ -57,7 +58,7 @@ jobs:
           fi
           
           
-          CHANGED_PKGS=$(git diff --name-only $BASE_SHA $HEAD_SHA | awk -F'/' '{print $1}' | sort -u | grep -v '^\.' | tr '\n' ' ')
+          CHANGED_PKGS=$(git diff --name-only $BASE_SHA $HEAD_SHA | awk -F'/' '{print $1}' | sort -u | grep -v '^\.' | grep -vx 'smartdns' | tr '\n' ' ')
           
           echo "Changed packages: $CHANGED_PKGS"
           
